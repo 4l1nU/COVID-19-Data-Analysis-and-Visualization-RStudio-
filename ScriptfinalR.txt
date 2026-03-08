@@ -1,0 +1,233 @@
+
+
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(ROCR)
+library(naivebayes)
+library(psych)
+library(caret)
+library(rpart)
+library(scatterplot3d)
+library(GGally)
+library(e1071)
+library(ggthemes)
+library(plotly)
+library(readr)
+library(gganimate)
+library(geosphere)
+library(DT)
+library(scales)
+library(openair)
+library(corrplot)
+library(viridisLite)
+library(viridis)
+library(RColorBrewer)
+library(ggdark)
+
+
+
+
+corona <- read_csv("coronavirus.csv")
+view(corona)
+
+
+#prelucare date 
+
+corona <- corona[c(1,5,4,6,7,8,9,10,2,3)]
+corona[9:10]<- list(NULL) 
+names (corona)[4]<-c("Total.Cases")
+names (corona)[5]<-c("Total.Deaths")
+names (corona)[6]<-c("Tot.Cases.1M.pop")
+names (corona)[7]<-c("Tot.Deaths.1M.pop")
+names (corona)[8]<-c("Death.percentage")
+
+corona <- corona %>%
+  mutate(rezultat = case_when(Death.percentage >= 2 ~ 1,
+                              Death.percentage <= 2 ~ 0)
+  )
+
+View(corona)
+#vizualizare caracteristici date
+summary(corona)
+str(corona)
+
+#tehnici de vizualizare ale datelor
+
+ggplot(data = corona) +
+  geom_point(mapping = aes(Population, Total.Cases))
+
+ggplot(corona) +
+  geom_point(aes(Population,Total.Deaths)) +
+  facet_wrap(~3 , nrow = 3)
+
+
+
+
+top_10_confirmed <- corona %>%
+  dplyr::select('Country', Total.Cases) %>%
+  arrange(desc(Total.Cases))
+
+top_10_confirmed[1:10,] %>%
+  ggplot(aes(x = reorder(`Country`,Total.Cases), y = Total.Cases )) +
+  geom_bar(stat = "identity", fill  = "red", width = 0.8) +
+  theme_economist() +
+  scale_y_continuous(breaks = seq(0, 100000000, by = 10000000), labels = comma) +
+  coord_flip() +
+  labs(x = "", y = "", title = "Top 10 (the Most Cases)") +
+  theme(axis.text.x = element_text(angle = 45)) +
+  theme(axis.title = element_text(size = 14, colour = "black"),
+        axis.text.y = element_text(size = 11, face = "bold"))
+
+top_10_death <- corona %>%
+  dplyr::select('Country', Total.Deaths) %>%
+  arrange(desc(Total.Deaths))
+
+top_10_death[1:10,] %>%
+  ggplot(aes(x = reorder(`Country`,Total.Deaths), y = Total.Deaths )) +
+  geom_bar(stat = "identity", fill  = "blue", width = 0.8) +
+  theme_economist() +
+  scale_y_continuous(breaks = seq(0, 1200000, by = 100000), labels = comma) +
+  coord_flip() +
+  labs(x = "", y = "", title = "Top 10 (the Most Deaths)") +
+  theme(axis.text.x = element_text(angle = 45)) +
+  theme(axis.title = element_text(size = 14, colour = "black"),
+        axis.text.y = element_text(size = 11, face = "bold"))
+
+
+
+ggplot(data = corona) +
+  geom_point(mapping = aes(x = Tot.Cases.1M.pop, y = Tot.Deaths.1M.pop), color="green")
+
+ggplot(data = corona) +
+  geom_point(mapping = aes(x = Total.Cases, y = Total.Deaths), color="green")
+
+corona$rezultat <- as.factor(corona$rezultat)
+
+corona %>%
+  filter(rezultat=="0") %>%
+  select_if(is.numeric) %>%
+  cor() %>%
+  corrplot::corrplot()
+
+corona %>%
+  filter(rezultat=="1") %>%
+  select_if(is.numeric) %>%
+  cor() %>%
+  corrplot::corrplot() 
+
+gr3d <- scatterplot3d(corona$Population, corona$Total.Cases, corona$Total.Deaths, type="p", angle = 70, pch = 16, color = "red")
+
+
+
+ggplot(corona) +
+  geom_point(aes(x = Total.Cases, y = Total.Deaths, color = rezultat, shape = rezultat)) +
+  scale_shape_manual(values = c(16,8)) +
+  theme(text = element_text(size = 20))
+
+ggplot(corona) +
+  geom_boxplot(aes(x = rezultat, y = Total.Deaths, fill = rezultat)) +
+  theme(text = element_text(size = 20))
+
+ggplot(corona) +
+  geom_boxplot(aes(x = rezultat, y = Total.Cases, fill = rezultat)) +
+  theme(text = element_text(size = 20))
+
+#eliminare denumire tari si continente
+corona[1:2]<- list(NULL) 
+
+
+#naive bayes
+library(rsample)
+set.seed(123)
+split <- initial_split(corona, prop = 0.6, strata = "rezultat")
+train <- training(split)
+test <- testing(split)
+
+table(train$ rezultat)
+table(test$ rezultat)
+
+features <- setdiff(names(train), "rezultat")
+x <- train[,features]
+y <- train$rezultat
+
+train_control <- trainControl(
+  method = "cv",
+  number = 10 )
+
+
+mod_nb1 <- train(
+  x = x,
+  y = y,
+  method = "nb",
+  trControl = train_control )
+mod_nb1
+confusionMatrix(mod_nb1)
+
+
+
+search_grid <- expand.grid(
+  usekernel = c(TRUE, FALSE),
+  fL = 0.5,
+  adjust = seq(0, 5, by = 1) )
+
+mod_nb2 = train(
+  x = x,
+  y = y,
+  method = "nb",
+  trControl = train_control,
+  tuneGrid = search_grid,
+)
+mod_nb2
+confusionMatrix(mod_nb2)
+
+mod_nb2$results %>%
+  top_n(5, wt = Accuracy) %>%
+  arrange(desc(Accuracy))
+
+
+
+pred <- predict(mod_nb2, test)
+pred
+predProb <- predict(mod_nb2, test, type = "prob")
+predProb
+confusionMatrix(pred, test$rezultat)
+
+library(pROC)
+
+dataset <- data.frame(
+  actual.class <- test$rezultat,
+  probability <- predProb[,1]
+)
+roc.val <- roc(actual.class ~ probability, dataset)
+roc.val
+roc.val$specificities
+roc.val$sensitivities
+adf <- data.frame(specificity <- roc.val$specificities, sensitivity <- roc.val$sensitivities)
+
+ggplot(adf, aes(specificity, sensitivity)) + geom_line(color = "red") + scale_x_reverse() + theme(text = element_text(size = 20))
+
+
+
+
+#Regresia Logistica
+
+
+mod<-glm(rezultat~.,train,family="binomial")
+summary(mod)
+
+mod_all<-glm(rezultat ~ Total.Deaths + Total.Cases,train,family="binomial")
+summary(mod_all)
+
+pred.test <- predict(mod, test, type = "response")
+table(pred.test > 0.5, test$rezultat)
+
+
+predictedval <- ifelse(pred.test>0.5, 1, 0)
+modconfmatrix <- table(Predicted=predictedval, Actual = test$rezultat)
+modconfmatrix
+
+
+sum(diag(modconfmatrix))/sum(modconfmatrix)
+
+
